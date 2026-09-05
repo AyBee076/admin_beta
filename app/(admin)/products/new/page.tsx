@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { setItem, getItem } from "@/utils/localStorage";
 import { useRouter } from "next/navigation";
+import Form from "next/form";
 import { createClient } from "@/lib/supabase/client";
 import { TrashIcon } from "@phosphor-icons/react";
 import ImageUpload from "@/components/ImageUpload";
@@ -18,19 +20,45 @@ type DraftVariant = {
   stock: string;
 };
 
+type ProductForm = {
+  name: string;
+  description: string;
+  price: string;
+  categoryId: string;
+  imageUrl: string;
+};
+
+type SavedDraft = ProductForm & { variants: DraftVariant[] };
+
+const STORAGE_KEY = "Form";
+
 export default function NewProductPage() {
   const router = useRouter();
   const [categories, setCategories] = useState<Category[]>([]);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [price, setPrice] = useState("");
-  const [categoryId, setCategoryId] = useState("");
-  const [imageUrl, setImageUrl] = useState("");
+
+  // Read localStorage only once, on first render
+  const savedForm = useMemo(
+    () => getItem(STORAGE_KEY) as SavedDraft | undefined,
+    [],
+  );
+
+  const [formValues, setFormValues] = useState<ProductForm>(
+    () =>
+      savedForm ?? {
+        name: "",
+        description: "",
+        price: "",
+        categoryId: "",
+        imageUrl: "",
+      },
+  );
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Draft variants, not saved yet
-  const [variants, setVariants] = useState<DraftVariant[]>([]);
+  const [variants, setVariants] = useState<DraftVariant[]>(
+    () => savedForm?.variants ?? [],
+  );
   const [vSize, setVSize] = useState("");
   const [vColor, setVColor] = useState("");
   const [vStock, setVStock] = useState("0");
@@ -50,6 +78,13 @@ export default function NewProductPage() {
       ignore = true;
     };
   }, []);
+
+ const handleChange = (
+  e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
+) => {
+  const { name, value } = e.target;
+  setFormValues((prev) => ({ ...prev, [name]: value }));
+};
 
   const addDraftVariant = () => {
     if (!vSize || !vColor) return;
@@ -71,7 +106,16 @@ export default function NewProductPage() {
     setVariants((prev) => prev.filter((v) => v.tempId !== tempId));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Clears the saved draft from localStorage (called after successful submit)
+  const clearDraft = () => {
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -82,11 +126,11 @@ export default function NewProductPage() {
     const { data: product, error: productError } = await supabase
       .from("products")
       .insert({
-        name,
-        description,
-        price: parseFloat(price),
-        category_id: categoryId || null,
-        image_url: imageUrl || null,
+        name: formValues.name,
+        description: formValues.description,
+        price: parseFloat(formValues.price),
+        category_id: formValues.categoryId || null,
+        image_url: formValues.imageUrl || null,
         is_deleted: false,
       })
       .select()
@@ -121,20 +165,26 @@ export default function NewProductPage() {
       }
     }
 
+    clearDraft(); // wipe the saved draft now that it's been submitted successfully
     router.push("/products");
     router.refresh();
   };
 
+  useEffect(() => {
+    setItem(STORAGE_KEY, { ...formValues, variants });
+  }, [formValues, variants]);
+
   return (
     <div className="p-6 max-w-lg">
       <h1 className="text-2xl font-semibold mb-6">Add Product</h1>
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <Form action="" onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">Name</label>
           <input
             type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            name="name"
+            value={formValues.name}
+            onChange={handleChange}
             required
             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           />
@@ -143,8 +193,9 @@ export default function NewProductPage() {
         <div>
           <label className="block text-sm font-medium mb-1">Description</label>
           <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            name="description"
+            value={formValues.description}
+            onChange={handleChange}
             rows={4}
             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           />
@@ -155,8 +206,9 @@ export default function NewProductPage() {
           <input
             type="number"
             step="0.01"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
+            name="price"
+            value={formValues.price}
+            onChange={handleChange}
             required
             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           />
@@ -165,8 +217,9 @@ export default function NewProductPage() {
         <div>
           <label className="block text-sm font-medium mb-1">Category</label>
           <select
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
+            name="categoryId"
+            value={formValues.categoryId}
+            onChange={handleChange}
             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           >
             <option value="">Select a category</option>
@@ -179,9 +232,16 @@ export default function NewProductPage() {
         </div>
 
         <div>
-  <label className="block text-sm font-medium mb-1">Product Image</label>
-  <ImageUpload currentUrl={imageUrl} onUploaded={(url) => setImageUrl(url)} />
-</div>
+          <label className="block text-sm font-medium mb-1">
+            Product Image
+          </label>
+          <ImageUpload
+            currentUrl={formValues.imageUrl}
+            onUploaded={(url) =>
+              setFormValues((prev) => ({ ...prev, imageUrl: url }))
+            }
+          />
+        </div>
 
         {/* Draft variants section */}
         <div className="border-t pt-4">
@@ -252,7 +312,7 @@ export default function NewProductPage() {
         >
           {loading ? "Saving..." : "Save product"}
         </button>
-      </form>
+      </Form>
     </div>
   );
 }

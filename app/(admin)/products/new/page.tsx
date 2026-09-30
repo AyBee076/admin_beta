@@ -7,6 +7,19 @@ import Form from "next/form";
 import { createClient } from "@/lib/supabase/client";
 import { TrashIcon } from "@phosphor-icons/react";
 import ImageUpload from "@/components/ImageUpload";
+import ProductImagesUpload, {
+  ProductImages,
+} from "@/components/ProductImagesUpload";
+import { Button } from "@/components/ui/button";
+
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type Category = {
   id: string;
@@ -28,7 +41,13 @@ type ProductForm = {
   imageUrl: string;
 };
 
-type SavedDraft = ProductForm & { variants: DraftVariant[] };
+type SavedDraft = ProductForm & {
+  variants: DraftVariant[];
+  images?: ProductImages;
+  vSize?: string;
+  vColor?: string;
+  vStock?: string;
+};
 
 const STORAGE_KEY = "Form";
 
@@ -36,10 +55,17 @@ export default function NewProductPage() {
   const router = useRouter();
   const [categories, setCategories] = useState<Category[]>([]);
 
+  const [fitFeatures, setFitFeatures] = useState("");
+  const [fabricCare, setFabricCare] = useState("");
+
   // Read localStorage only once, on first render
   const savedForm = useMemo(
     () => getItem(STORAGE_KEY) as SavedDraft | undefined,
     [],
+  );
+
+  const [images, setImages] = useState<ProductImages>(
+    () => savedForm?.images ?? { front: "", back: "", detail: "" },
   );
 
   const [formValues, setFormValues] = useState<ProductForm>(
@@ -59,9 +85,9 @@ export default function NewProductPage() {
   const [variants, setVariants] = useState<DraftVariant[]>(
     () => savedForm?.variants ?? [],
   );
-  const [vSize, setVSize] = useState("");
-  const [vColor, setVColor] = useState("");
-  const [vStock, setVStock] = useState("0");
+  const [vSize, setVSize] = useState(() => savedForm?.vSize ?? "");
+  const [vColor, setVColor] = useState(() => savedForm?.vColor ?? "");
+  const [vStock, setVStock] = useState(() => savedForm?.vStock ?? "0");
 
   useEffect(() => {
     let ignore = false;
@@ -79,12 +105,14 @@ export default function NewProductPage() {
     };
   }, []);
 
- const handleChange = (
-  e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
-) => {
-  const { name, value } = e.target;
-  setFormValues((prev) => ({ ...prev, [name]: value }));
-};
+  const handleChange = (
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >,
+  ) => {
+    const { name, value } = e.target;
+    setFormValues((prev) => ({ ...prev, [name]: value }));
+  };
 
   const addDraftVariant = () => {
     if (!vSize || !vColor) return;
@@ -120,6 +148,13 @@ export default function NewProductPage() {
     setLoading(true);
     setError("");
 
+    // Validate images FIRST, before touching Supabase at all
+    if (!images.front || !images.back) {
+      setError("Front and back images are required.");
+      setLoading(false);
+      return;
+    }
+
     const supabase = createClient();
 
     // Step 1: insert the product, get its new id back
@@ -130,7 +165,7 @@ export default function NewProductPage() {
         description: formValues.description,
         price: parseFloat(formValues.price),
         category_id: formValues.categoryId || null,
-        image_url: formValues.imageUrl || null,
+        image_url: images.front, // front image acts as the thumbnail
         is_deleted: false,
       })
       .select()
@@ -142,7 +177,41 @@ export default function NewProductPage() {
       return;
     }
 
-    // Step 2: insert all draft variants using the new product's id
+    // Step 2: insert the front/back/detail rows into product_images
+    const imageRows = [
+      {
+        product_id: product.id,
+        image_url: images.front,
+        image_type: "front",
+        is_primary: true,
+      },
+      {
+        product_id: product.id,
+        image_url: images.back,
+        image_type: "back",
+        is_primary: false,
+      },
+    ];
+    if (images.detail) {
+      imageRows.push({
+        product_id: product.id,
+        image_url: images.detail,
+        image_type: "detail",
+        is_primary: false,
+      });
+    }
+
+    const { error: imagesError } = await supabase
+      .from("product_images")
+      .insert(imageRows);
+
+    if (imagesError) {
+      setError(`Product saved, but images failed: ${imagesError.message}`);
+      setLoading(false);
+      return;
+    }
+
+    // Step 3: insert all draft variants using the new product's id
     if (variants.length > 0) {
       const rows = variants.map((v) => ({
         product_id: product.id,
@@ -156,24 +225,40 @@ export default function NewProductPage() {
         .insert(rows);
 
       if (variantError) {
-        // Product was created, but variants failed — let the user know clearly
         setError(
-          `Product saved, but variants failed: ${variantError.message}. You can add them from the edit page.`,
+          `Product and images saved, but variants failed: ${variantError.message}. You can add them from the edit page.`,
         );
         setLoading(false);
         return;
       }
     }
 
-    clearDraft(); // wipe the saved draft now that it's been submitted successfully
+    clearDraft();
     router.push("/products");
     router.refresh();
   };
 
   useEffect(() => {
-    setItem(STORAGE_KEY, { ...formValues, variants });
-  }, [formValues, variants]);
+    setItem(STORAGE_KEY, {
+      ...formValues,
+      variants,
+      images,
+      vSize,
+      vColor,
+      vStock,
+    });
+  }, [formValues, variants, images, vSize, vColor, vStock]);
 
+  const items = [
+    { label: "XS", value: "XS" },
+    { label: "S", value: "S" },
+    { label: "M", value: "M" },
+    { label: "L", value: "L" },
+    { label: "XL", value: "XL" },
+    { label: "XXL", value: "XXL" },
+  ];
+
+  const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
   return (
     <div className="p-6 max-w-lg">
       <h1 className="text-2xl font-semibold mb-6">Add Product</h1>
@@ -230,33 +315,61 @@ export default function NewProductPage() {
             ))}
           </select>
         </div>
+        <div>
+  <label className="block text-sm font-medium mb-1">Fit & Features</label>
+  <textarea
+    value={fitFeatures}
+    onChange={(e) => setFitFeatures(e.target.value)}
+    rows={4}
+    placeholder={"One point per line, e.g.\nSlim fit\nCrew neck\nBreathable fabric"}
+    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+  />
+</div>
+
+<div>
+  <label className="block text-sm font-medium mb-1">Fabric & Care</label>
+  <textarea
+    value={fabricCare}
+    onChange={(e) => setFabricCare(e.target.value)}
+    rows={4}
+    placeholder={"One point per line, e.g.\n100% cotton\nMachine wash cold\nDo not bleach"}
+    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+  />
+</div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">
-            Product Image
+          <label className="block text-sm font-medium mb-2">
+            Product Images
           </label>
-          <ImageUpload
-            currentUrl={formValues.imageUrl}
-            onUploaded={(url) =>
-              setFormValues((prev) => ({ ...prev, imageUrl: url }))
-            }
-          />
+          <ProductImagesUpload value={images} onChange={setImages} />
         </div>
 
         {/* Draft variants section */}
         <div className="border-t pt-4">
           <label className="block text-sm font-medium mb-2">
-            Variants (sizes / colors) — optional
+            Variants (sizes / colors / stock) 
           </label>
 
           <div className="flex gap-2 mb-3 flex-wrap">
-            <input
-              type="text"
-              placeholder="Size (e.g. M)"
+            <Select
+              items={items}
               value={vSize}
-              onChange={(e) => setVSize(e.target.value)}
-              className="w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-            />
+              onValueChange={(value) => setVSize(value ?? "")}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Size" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {items.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+
             <input
               type="text"
               placeholder="Color"
@@ -305,13 +418,13 @@ export default function NewProductPage() {
 
         {error && <p className="text-red-600 text-sm">{error}</p>}
 
-        <button
+        <Button
           type="submit"
           disabled={loading}
-          className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+          className="mt-5 rounded-md bg-black px-4 py-2 w-full text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
         >
           {loading ? "Saving..." : "Save product"}
-        </button>
+        </Button>
       </Form>
     </div>
   );

@@ -58,7 +58,7 @@ export default function Sidebar() {
         })}
       </ul>
 
-      <div className="border-t border-gray-200 p-3">
+      <div className=" border-gray-200 p-3 mb-20">
         <LogoutButton />
       </div>
     </nav>

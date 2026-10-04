@@ -39,7 +39,7 @@ export default function ProductImagesUpload({
 
       <div>
         <label className="block text-sm font-medium mb-1">
-          Detail <span className="text-gray-400">(optional)</span>
+          Detail 
         </label>
         <ImageUpload
           currentUrl={value.detail}
